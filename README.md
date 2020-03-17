@@ -28,3 +28,4 @@ Go汇编语言不是一门单独的语言, 无法把代码拿出去独立运行,
 
 - [Go语言高级编程](https://chai2010.cn/advanced-go-programming-book/)
 - [Go官方汇编教程](https://golang.org/doc/asm)
+- [Plan9汇编文档](https://9p.io/sys/doc/asm.html)
