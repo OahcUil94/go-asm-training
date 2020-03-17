@@ -81,3 +81,134 @@ DATA ·ID+7(SB)/1,$0x00
 ```
 
 然后执行`go run .`, 注意: 不要执行`go run pkg.go pkg.s`, 一定要把包当做一个整体来运行, 前期测试的时候, 不需要去写Hello World的程序, 这个程序对于汇编语言来说是一个很复杂的程序
+
+package main
+
+var Name = "gopher"
+
+//func main() {
+//	println(Name)
+//}
+
+
+/*
+不要包含main函数, 否则编译出来的汇编代码会很长
+
+go tool compile -S string.go
+
+go.cuinfo.packagename. SDWARFINFO dupok size=0
+        0x0000 6d 61 69 6e                                      main
+
+// 这部分是初始化gopher的字符串
+// 0x0000这个可以猜测是gopher字符串的地址
+// 67 6f 70 68 65 72是gopher字符串的值 fmt.Printf("%x", []byte("gopher"))
+// 因为Go语言的字符串并不是值类型，Go字符串其实是一种只读的引用类型。如果多个代码中出现了相同的"gopher"只读\字符串时，程序链接后可以引用的同一个符号go.string."gopher"
+// S RO read only Data 该符号有一个SRODATA标志表示这个数据在只读内存段，dupok表示出现多个相同标识符的数据时只保留一个就可以了
+// duplicates
+go.string."gopher" SRODATA dupok size=6
+        0x0000 67 6f 70 68 65 72                                gopher
+""..inittask SNOPTRDATA size=24
+        0x0000 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00 00  ................
+        0x0010 00 00 00 00 00 00 00 00                          ........
+
+"".Name SDATA size=16
+        0x0000 00 00 00 00 00 00 00 00 06 00 00 00 00 00 00 00  ................
+        rel 0+8 t=1 go.string."gopher"+0
+
+要读懂上面的代码, 需要知道go里面的反射包reflect, 一个是数据的指针, 一部分是数据的长度
+type StringHeader struct {
+    Data uintptr // 在amd64的环境下 uintptr是8个字节，int也是8个字节, 正好16个字节
+    Len  int
+}
+
+所以这里的16个字节和Name SDATA size=16是对应的
+0x0000 00 00 00 00 00 00 00 00 这8个字节是空对应uintptr 对应的是0x0000 67 6f 70 68 65 72 这前4个零的地址
+06 00 00 00 00 00 00 00 这8个字节对应的是字符串的长度, 6个字符
+ */
+
+## 定义字符串初始化的汇编代码
+
+```pkg.go
+GLOBL ·NameData(SB),$8
+DATA ·NameData(SB)/8,$"gopher"
+
+GLOBL ·Name(SB),$16
+DATA ·Name+0(SB)/8,$·NameData(SB)
+DATA ·Name+8(SB)/8,$6
+```
+
+```main.go
+var Name string
+
+func main() {
+	println(Name)
+}
+```
+
+执行`go run .`会报下面的错误: 
+
+```
+# implementation-and-declaration
+main.NameData: missing Go type information for global symbol: size 8
+```
+
+意思是`pkg.s`中定义的NameData, Go语言需要知道它是否包含指针信息, 有两种办法, 一种是在pkg.go中声明一下: 
+
+```golang
+package main
+
+import "fmt"
+
+var NameData [8]byte
+var Name string
+
+func main() {
+	fmt.Println(string(NameData[0:]))
+	println(Name)
+}
+```
+
+为什么上面声明一下就可以了, Go语言只关心一点, 就是里面有没有指针, 如果有指针的话, 进行垃圾回收的时候需要进行扫描变量里面的数据
+如果没有指针, 它才不关心数据类型, 为什么会报错, 是和Go语言GC的工作机制有关系
+
+或者在`pkg.s`中指明一下NameData的状态NOPTR: 
+
+```pkg.s
+// https://github.com/golang/go/blob/master/src/runtime/textflag.h
+// 该文件就是一些宏定义
+#include "textflag.h"
+
+GLOBL ·NameData(SB),NOPTR,$8
+DATA ·NameData(SB)/8,$"gopher"
+
+GLOBL ·Name(SB),$16
+DATA ·Name+0(SB)/8,$·NameData(SB)
+DATA ·Name+8(SB)/8,$6
+```
+
+上面代码里, 是把NameData绑定到Name里了, 如果要修改字符串的内容, 在Go语言里是实现不了的, 或者只能使用unsafe包来改变, 但是在汇编语言里是可以的:
+
+```package main
+   
+   var NameData [8]byte
+   var Name string
+   
+   func main() {
+   	println(Name)
+   	NameData[0] = '?'
+   	println(Name)
+   }
+``` 
+
+所以说字符串的只读性, Go语言来保证, 汇编语言保证不了, 用汇编语言的人就是要灵活, 要实现这个功能
+
+用汇编语言是为了性能和底层CPU特殊的功能, 所以不要跑偏了
+
+```
+GLOBL ·Name(SB),$24 // 24个字节, amd64位CPU寄存器的长度是8个字节, 再分配8个字节, 好对齐？
+DATA ·Name+0(SB)/8,$·Name+16(SB) // $·Name+16(SB)是字符串值的内存地址  
+DATA ·Name+8(SB)/8,$6 // 这里设置了字符串的长度, 多少长度就会显示几个字符串
+DATA ·Name+16(SB)/8,$"gopher" // 这里填充了字符串的内容
+```
+这种把头部和数据打包到一起, 性能会很高, 因为它是紧密相关的, 如果分开的话, 相当于是有两端内存, 
+通过头部, 再找到它的数据, 虽然都是两次, 但是离的很近, 只有16个偏移量, 这时性能会比较好, 当然不是真的好, 有可能会好
