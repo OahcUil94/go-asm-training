@@ -212,3 +212,30 @@ DATA ·Name+16(SB)/8,$"gopher" // 这里填充了字符串的内容
 ```
 这种把头部和数据打包到一起, 性能会很高, 因为它是紧密相关的, 如果分开的话, 相当于是有两端内存, 
 通过头部, 再找到它的数据, 虽然都是两次, 但是离的很近, 只有16个偏移量, 这时性能会比较好, 当然不是真的好, 有可能会好
+
+
+这些内部函数在go1.10之后就不能再调用了
+CALL runtime·printstring(SB)
+CALL runtime·println(SB)
+
+我们重新构造一个print
+
+```
+// TEXT段类似于func关键字,
+// $16-0 16对应的是函数参数对应的大小, 头部的大小 s string 
+TEXT ·main(SB), $16-0
+MOVQ ·helloworld+0(SB), AX; MOVQ AX, 0(SP) // 把helloworld地址移植到AX寄存器里，把AX移动到0(SP栈指针)
+MOVQ ·helloworld+8(SB), BX; MOVQ BX, 8(SP) // 偏移8个地址
+// CALL runtime·printstring(SB) // 内置的println不能用, 内置的println在runtime内部, 但是它的协议接口已经发生变化了, 我们没法用了
+CALL ·println(SB)
+    
+   	RET
+```
+
+## 特殊字符
+
+Go语言函数或方法符号在编译为目标文件后，
+目标文件中的每个符号均包含对应包的绝对导入路径。
+因此目标文件的符号可能非常复杂，
+比如“path/to/pkg.(*SomeType).SomeMethod”或“go.string."abc"”等名字。
+汇编/表示除号, (小括号不知道什么意思, *有其他的含义, .表示整数部分, 汇编器是一个很弱智的汇编器, 
